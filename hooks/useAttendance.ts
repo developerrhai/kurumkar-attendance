@@ -679,6 +679,7 @@ export function useAttendance() {
     syncing,
     syncedAt,
     error,
+    clearError,
     page,
     totalPages,
     totalFiltered: filtered.length,
@@ -703,3 +704,4 @@ export function useAttendance() {
     deleteHoliday,
   };
 }
+
