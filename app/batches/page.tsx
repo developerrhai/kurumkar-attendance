@@ -207,7 +207,7 @@ export default function BatchesPage() {
                 {editingBatch ? "Edit Batch Details" : "Create New Timing Batch"}
               </h3>
               <button onClick={() => setIsFormOpen(false)} className="text-gray-400 hover:text-white transition-colors">
-                âœ•
+                ✕
               </button>
             </div>
 

@@ -69,12 +69,16 @@ export default function ReportsPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Top bar */}
-      <div className="bg-gray-900 px-6 py-4 flex items-center justify-between">
-        <div>
-          <h1 className="text-white text-lg font-medium">Reports Generator</h1>
-          <p className="text-gray-400 text-sm mt-0.5">
-            Download comprehensive system reports
-          </p>
+      <div className="bg-gray-900 px-6 py-4 flex items-center justify-between shadow-md">
+        <div className="flex items-center gap-3">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/kurumkar-logo.png" alt="Kurumkar Classes" className="w-10 h-10 object-contain rounded-md bg-white p-1 shadow-sm" />
+          <div>
+            <h1 className="text-white text-lg font-bold tracking-tight">Kurumkar Classes • Reports</h1>
+            <p className="text-gray-400 text-xs">
+              Download comprehensive system and attendance reports
+            </p>
+          </div>
         </div>
         <div className="flex items-center gap-3">
           <Link

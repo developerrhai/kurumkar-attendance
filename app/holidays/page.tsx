@@ -181,7 +181,7 @@ export default function HolidaysPage() {
                   {holiday ? (
                     <div className="w-full mt-2">
                       <div className="text-[10px] font-bold text-red-800 truncate" title={holiday.reason}>
-                        ðŸ›‘ {holiday.reason || "Holiday"}
+                        ⛔ {holiday.reason || "Holiday"}
                       </div>
                       <span className="text-[8px] bg-red-100 text-red-850 px-1 py-0.5 rounded font-medium mt-1 inline-block">
                         Closed
@@ -223,7 +223,7 @@ export default function HolidaysPage() {
             <div className="bg-gray-900 px-6 py-4 flex items-center justify-between">
               <h3 className="text-white font-medium">Mark Day Closed / Holiday</h3>
               <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-white transition-colors">
-                âœ•
+                ✕
               </button>
             </div>
 
