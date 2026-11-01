@@ -113,8 +113,9 @@ export function AddEmployeeModal({ open, onClose, onSubmit, batches }: Props) {
           {/* Name & Gender */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1.5">Full Name</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1.5">Full Name *</label>
               <input
+                required
                 value={form.name}
                 onChange={(e) => update({ name: e.target.value })}
                 placeholder="Enter full name"

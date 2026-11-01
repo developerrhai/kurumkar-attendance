@@ -80,6 +80,7 @@ export function useAttendance() {
   const [syncing, setSyncing] = useState(false);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const clearError = useCallback(() => setError(null), []);
   const [page, setPage] = useState(0);
   const [biometricImportCode, setBiometricImportCode] = useState<string | null>(null);
   const [notifyingWhatsApp, setNotifyingWhatsApp] = useState(false);

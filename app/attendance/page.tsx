@@ -38,6 +38,7 @@ export default function AttendancePage() {
     notifyingSMS,
     standards,
     batches,
+    clearError,
   } = useAttendance();
 
   const [isAddOpen, setIsAddOpen] = useState(false);
@@ -67,16 +68,19 @@ export default function AttendancePage() {
       }
 
       for (const row of rows) {
+        const code = String(row["Employee Code"] ?? row["Employee ID"] ?? row["Code"] ?? row["ID"] ?? "").trim();
+        const name = String(row["Employee Name"] ?? row["Name"] ?? "").trim();
+        if (!code || !name) continue;
         await addEmployee({
-          code:     row["Employee Code"] ?? row["Employee ID"] ?? row["Code"] ?? row["ID"]  ?? "",
-          name:     row["Employee Name"] ?? row["Name"]        ?? "",
-          gender:   row["Gender"]                                    ?? "",
-          contact:  row["Contact"]     ?? row["Phone"]               ?? "",
-          rollNo:   row["Roll No"]     ?? row["Roll Number"]         ?? "",
-          standard: row["Standard"]    ?? row["Class"]               ?? "",
-          status:  (row["Status"] as AttendanceRecord["status"])     ?? "Present",
-          punchIn:  row["Punch In"]    ?? row["Check In"]            ?? "",
-          punchOut: row["Punch Out"]   ?? row["Check Out"]           ?? "",
+          code,
+          name,
+          gender:   String(row["Gender"] ?? "").trim() || "Male",
+          contact:  String(row["Contact"] ?? row["Phone"] ?? "").trim(),
+          rollNo:   String(row["Roll No"] ?? row["Roll Number"] ?? "").trim(),
+          standard: String(row["Standard"] ?? row["Class"] ?? "").trim(),
+          status:  (row["Status"] as AttendanceRecord["status"]) ?? "Present",
+          punchIn:  String(row["Punch In"] ?? row["Check In"] ?? "").trim(),
+          punchOut: String(row["Punch Out"] ?? row["Check Out"] ?? "").trim(),
         });
       }
     } catch (err) {
@@ -249,17 +253,18 @@ export default function AttendancePage() {
         </div>
       </div>
 
-      {/* Sync error banner */}
+      {/* Error banner */}
       {error && (
         <div className="mx-6 mt-4 px-4 py-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-3 text-sm text-red-700">
           <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M12 3C6.48 3 2 7.48 2 12s4.48 9 10 9 10-4.48 10-10S17.52 3 12 3z"/>
           </svg>
-          <span>
-            <strong>Sync error:</strong> {error}.{" "}
+          <span className="flex-1">
+            <strong>{error.toLowerCase().includes("sync") ? "Sync error:" : "Error:"}</strong> {error}.{" "}
             {error.includes("API Key") && "Check your SMARTOFFICE_API_KEY in .env.local."}
             {error.includes("Serial Number") && "Verify the device serial number in SmartOffice."}
           </span>
+          <button onClick={clearError} className="text-red-500 hover:text-red-800 text-base font-bold ml-auto px-2 py-0.5 rounded">✕</button>
         </div>
       )}
 
