@@ -1,0 +1,704 @@
+﻿"use client";
+
+import { useState, useCallback, useMemo, useEffect } from "react";
+import type {
+  AttendanceRecord,
+  AttendanceSummary,
+  AttendanceStatus,
+  FilterState,
+  Batch,
+  Holiday,
+} from "@/types/attendance";
+
+const today = new Date().toISOString().split("T")[0];
+
+const defaultFilter: FilterState = {
+  search: "",
+  status: "",
+  date: today,
+  standard: "",
+  batchId: "",
+};
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://institute-api.rhaitech.online/kurumkarattendance/api";
+
+function computeSummary(recs: AttendanceRecord[]): AttendanceSummary {
+  return {
+    total: recs.length,
+    present: recs.filter((r) => r.status === "Present").length,
+    absent: recs.filter((r) => r.status === "Absent").length,
+    late: recs.filter((r) => r.status === "Late").length,
+    onLeave: recs.filter((r) => r.status === "On Leave").length,
+  };
+}
+
+export interface AddEmployeeData {
+  code: string;
+  name: string;
+  gender: string;
+  contact: string;
+  rollNo: string;
+  standard: string;
+  section?: string;
+  parentName?: string;
+  parentMobile?: string;
+  status: AttendanceStatus;
+  punchIn: string;
+  punchOut: string;
+  batchIds?: number[];
+}
+
+export interface BiometricUploadOptions {
+  cardNumber?: string;
+  serialNumbers?: string;
+  verifyMode?: string;
+  isFaceUpload?: boolean;
+  isFPUpload?: boolean;
+  isCardUpload?: boolean;
+  isBioPasswordUpload?: boolean;
+}
+
+export interface EditRecordData {
+  name: string;
+  contact: string;
+  status: AttendanceStatus;
+  punchIn: string;
+  punchOut: string;
+  standard?: string;
+  section?: string;
+  rollNo?: string;
+  parentName?: string;
+  parentMobile?: string;
+  batchIds?: number[];
+  batchId?: number | null;
+}
+
+export function useAttendance() {
+  const [records, setRecords] = useState<AttendanceRecord[]>([]);
+  const [batches, setBatches] = useState<Batch[]>([]);
+  const [filter, setFilter] = useState<FilterState>(defaultFilter);
+  const [syncing, setSyncing] = useState(false);
+  const [syncedAt, setSyncedAt] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const [biometricImportCode, setBiometricImportCode] = useState<string | null>(null);
+  const [notifyingWhatsApp, setNotifyingWhatsApp] = useState(false);
+  const [notifyingSMS, setNotifyingSMS] = useState(false);
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
+
+  const PER_PAGE = 10;
+
+  // â”€â”€ Fetch Batches â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const fetchBatches = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/batches`);
+      if (res.ok) {
+        const data = await res.json();
+        const mapped = (data.batches ?? []).map((b: any) => ({
+          id: b.id,
+          name: b.name,
+          startTime: b.start_time ?? b.startTime ?? "",
+          endTime: b.end_time ?? b.endTime ?? "",
+          lateGraceMinutes: b.late_grace_minutes ?? b.lateGraceMinutes ?? 10,
+          scheduledDays: b.scheduled_days ? b.scheduled_days.split(",") : ["Mon", "Tue", "Wed", "Thu", "Fri"],
+        }));
+        setBatches(mapped);
+      }
+    } catch (err) {
+      console.error("Failed to fetch batches:", err);
+    }
+  }, []);
+
+  // Fetch batches on initial mount
+  useEffect(() => {
+    fetchBatches();
+  }, [fetchBatches]);
+
+  // â”€â”€ Fetch Attendance â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const fetchAttendance = useCallback(async (targetDate: string) => {
+    setSyncing(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/attendance?date=${targetDate}`);
+      if (!res.ok) {
+        let errData;
+        try {
+          errData = await res.json();
+        } catch {
+          throw new Error(`Server returned a non-JSON error (status ${res.status}). Ensure the backend is running properly.`);
+        }
+        throw new Error(errData.error || "Failed to fetch attendance.");
+      }
+      const data = await res.json();
+
+      const mapped = (data.records ?? []).map((r: any) => ({
+        ...r,
+        student: {
+          id: r.student?.id ?? r.studentId ?? r.id ?? "",
+          code: r.student?.code ?? r.studentCode ?? r.code ?? "",
+          name: r.student?.name ?? r.studentName ?? r.name ?? r.student?.EmployeeName ?? r.EmployeeName ?? r.employeeName ?? "Unknown",
+          gender: r.student?.gender ?? r.gender ?? "",
+          contact: r.student?.contact ?? r.contact ?? "",
+          rollNo: r.student?.rollNo ?? r.rollNo ?? "",
+          standard: r.student?.standard ?? r.standard ?? "",
+          section: r.student?.section ?? r.section ?? "",
+          parentName: r.student?.parentName ?? r.parentName ?? "",
+          parentMobile: r.student?.parentMobile ?? r.parentMobile ?? "",
+          batches: (r.student?.batches ?? []).map((b: any) => ({
+            id: b.id,
+            name: b.name,
+            startTime: b.start_time ?? b.startTime ?? "",
+            endTime: b.end_time ?? b.endTime ?? "",
+            lateGraceMinutes: b.late_grace_minutes ?? b.lateGraceMinutes ?? 10,
+          })),
+        },
+        batch: r.batch ? {
+          id: r.batch.id,
+          name: r.batch.name,
+          startTime: r.batch.start_time ?? r.batch.startTime ?? "",
+          endTime: r.batch.end_time ?? r.batch.endTime ?? "",
+          lateGraceMinutes: r.batch.late_grace_minutes ?? r.batch.lateGraceMinutes ?? 10,
+        } : { id: null, name: "General Batch", startTime: "09:00:00", endTime: "17:30:00" }
+      }));
+
+      setRecords(mapped);
+      setSyncedAt(data.syncedAt);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Failed to fetch attendance.");
+    } finally {
+      setSyncing(false);
+    }
+  }, []);
+
+  // Fetch on date change
+  useEffect(() => {
+    fetchAttendance(filter.date);
+  }, [filter.date, fetchAttendance]);
+
+  // â”€â”€ Sync Biometric Logs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const sync = useCallback(async (targetDate?: string) => {
+    const d = targetDate || filter.date;
+    setSyncing(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/attendance/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date: d }),
+      });
+      if (!res.ok) {
+        let errData;
+        try {
+          errData = await res.json();
+        } catch {
+          throw new Error(`Server returned a non-JSON error (status ${res.status}).`);
+        }
+        throw new Error(errData.error || "Sync failed.");
+      }
+      const data = await res.json();
+
+      const mapped = (data.records ?? []).map((r: any) => ({
+        ...r,
+        student: {
+          id: r.student?.id ?? r.studentId ?? r.id ?? "",
+          code: r.student?.code ?? r.studentCode ?? r.code ?? "",
+          name: r.student?.name ?? r.studentName ?? r.name ?? r.student?.EmployeeName ?? r.EmployeeName ?? r.employeeName ?? "Unknown",
+          gender: r.student?.gender ?? r.gender ?? "",
+          contact: r.student?.contact ?? r.contact ?? "",
+          rollNo: r.student?.rollNo ?? r.rollNo ?? "",
+          standard: r.student?.standard ?? r.standard ?? "",
+          section: r.student?.section ?? r.section ?? "",
+          parentName: r.student?.parentName ?? r.parentName ?? "",
+          parentMobile: r.student?.parentMobile ?? r.parentMobile ?? "",
+          batches: (r.student?.batches ?? []).map((b: any) => ({
+            id: b.id,
+            name: b.name,
+            startTime: b.start_time ?? b.startTime ?? "",
+            endTime: b.end_time ?? b.endTime ?? "",
+            lateGraceMinutes: b.late_grace_minutes ?? b.lateGraceMinutes ?? 10,
+          })),
+        },
+        batch: r.batch ? {
+          id: r.batch.id,
+          name: r.batch.name,
+          startTime: r.batch.start_time ?? r.batch.startTime ?? "",
+          endTime: r.batch.end_time ?? r.batch.endTime ?? "",
+          lateGraceMinutes: r.batch.late_grace_minutes ?? r.batch.lateGraceMinutes ?? 10,
+        } : { id: null, name: "General Batch", startTime: "09:00:00", endTime: "17:30:00" }
+      }));
+
+      setRecords(mapped);
+      setSyncedAt(data.syncedAt);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Failed to sync biometric data.");
+    } finally {
+      setSyncing(false);
+    }
+  }, [filter.date]);
+
+  // â”€â”€ Mark Leave â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const markLeave = useCallback(async (studentCode: string, batchId?: number | null) => {
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/attendance/leave`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentCode, date: filter.date, batchId }),
+      });
+      if (!res.ok) {
+        let errData;
+        try {
+          errData = await res.json();
+        } catch {
+          throw new Error(`Server returned a non-JSON error (status ${res.status}).`);
+        }
+        throw new Error(errData.error || "Failed to mark leave.");
+      }
+      setRecords((prev) =>
+        prev.map((r) =>
+          r.student.code === studentCode && (batchId === undefined || r.batch.id === batchId)
+            ? { ...r, status: "On Leave" as const, punchIn: null, punchOut: null, manuallyEdited: true }
+            : r
+        )
+      );
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Failed to mark leave.");
+    }
+  }, [filter.date]);
+
+  // â”€â”€ Add Employee â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const addEmployee = useCallback(async (data: AddEmployeeData) => {
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/students`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: data.code,
+          name: data.name,
+          gender: data.gender,
+          contact: data.contact,
+          rollNo: data.rollNo,
+          standard: data.standard,
+          section: data.section,
+          parentName: data.parentName,
+          parentMobile: data.parentMobile,
+          batchIds: data.batchIds || [],
+        }),
+      });
+      if (!res.ok) {
+        let errData;
+        try {
+          errData = await res.json();
+        } catch {
+          throw new Error(`Server returned a non-JSON error (status ${res.status}).`);
+        }
+        throw new Error(errData.error || "Failed to add student.");
+      }
+
+      if (data.punchIn || data.punchOut || data.status !== "Present") {
+        // If multiple batchIds are set, override all of them
+        const finalBatchIds = (data.batchIds && data.batchIds.length > 0) ? data.batchIds : [null];
+        for (const bid of finalBatchIds) {
+          await fetch(`${API_BASE}/attendance/record`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              studentCode: data.code,
+              date: filter.date,
+              status: data.status,
+              punchIn: data.punchIn,
+              punchOut: data.punchOut,
+              batchId: bid,
+            }),
+          });
+        }
+      }
+
+      await fetchAttendance(filter.date);
+      setPage(0);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Failed to add employee.");
+    }
+  }, [filter.date, fetchAttendance]);
+
+  // â”€â”€ Edit Record â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const editRecord = useCallback(async (studentCode: string, data: EditRecordData) => {
+    setError(null);
+    try {
+      // 1. Update Student Profile & Batch Assignments
+      const studentRes = await fetch(`${API_BASE}/students/${studentCode}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: data.name,
+          contact: data.contact,
+          standard: data.standard,
+          section: data.section,
+          rollNo: data.rollNo,
+          parentName: data.parentName,
+          parentMobile: data.parentMobile,
+          batchIds: data.batchIds,
+        }),
+      });
+
+      if (!studentRes.ok) {
+        let errData;
+        try {
+          errData = await studentRes.json();
+        } catch {
+          throw new Error(`Server returned a non-JSON error (status ${studentRes.status}).`);
+        }
+        throw new Error(errData.error || "Failed to update student profile.");
+      }
+
+      // 2. Update Attendance punch / status details for this specific batch
+      const attendanceRes = await fetch(`${API_BASE}/attendance/record`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentCode,
+          date: filter.date,
+          status: data.status,
+          punchIn: data.punchIn,
+          punchOut: data.punchOut,
+          batchId: data.batchId,
+        }),
+      });
+      if (!attendanceRes.ok) {
+        let errData;
+        try {
+          errData = await attendanceRes.json();
+        } catch {
+          throw new Error(`Server returned a non-JSON error (status ${attendanceRes.status}).`);
+        }
+        throw new Error(errData.error || "Failed to update attendance record.");
+      }
+
+      await fetchAttendance(filter.date);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Failed to edit attendance record.");
+    }
+  }, [filter.date, fetchAttendance]);
+
+  // â”€â”€ Delete Record â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const deleteRecord = useCallback(async (studentCode: string) => {
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/students/${studentCode}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        let errData;
+        try {
+          errData = await res.json();
+        } catch {
+          throw new Error(`Server returned a non-JSON error (status ${res.status}).`);
+        }
+        throw new Error(errData.error || "Failed to delete student.");
+      }
+      await fetchAttendance(filter.date);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Failed to delete student.");
+    }
+  }, [filter.date, fetchAttendance]);
+
+  // â”€â”€ Manage Batches â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const addBatch = useCallback(async (bData: Omit<Batch, "id">) => {
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/batches`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: bData.name,
+          start_time: bData.startTime,
+          end_time: bData.endTime,
+          late_grace_minutes: bData.lateGraceMinutes,
+          scheduled_days: bData.scheduledDays?.join(","),
+        }),
+      });
+      if (!res.ok) {
+        let errData;
+        try {
+          errData = await res.json();
+        } catch {}
+        throw new Error(errData?.error || "Failed to add batch");
+      }
+      await fetchBatches();
+    } catch (err: any) {
+      setError(err.message || "Failed to add batch");
+    }
+  }, [fetchBatches]);
+
+  const updateBatch = useCallback(async (id: number, bData: Partial<Batch>) => {
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/batches/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: bData.name,
+          start_time: bData.startTime,
+          end_time: bData.endTime,
+          late_grace_minutes: bData.lateGraceMinutes,
+          scheduled_days: bData.scheduledDays?.join(","),
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to update batch");
+      await fetchBatches();
+    } catch (err: any) {
+      setError(err.message || "Failed to update batch");
+    }
+  }, [fetchBatches]);
+
+  const deleteBatch = useCallback(async (id: number) => {
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/batches/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error("Failed to delete batch");
+      await fetchBatches();
+    } catch (err: any) {
+      setError(err.message || "Failed to delete batch");
+    }
+  }, [fetchBatches]);
+
+  // â”€â”€ Holiday Management â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const fetchHolidays = useCallback(async (month?: string) => {
+    try {
+      let url = `${API_BASE}/holidays`;
+      if (month) url += `?month=${month}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        setHolidays(data.holidays ?? []);
+      }
+    } catch (err) {
+      console.error("Failed to fetch holidays:", err);
+    }
+  }, []);
+
+  const addHoliday = useCallback(async (date: string, reason: string, isClosed: boolean = true) => {
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/holidays`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date, reason, is_closed: isClosed ? 1 : 0 }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to save holiday");
+      }
+      const month = date.slice(0, 7);
+      await fetchHolidays(month);
+    } catch (err: any) {
+      setError(err.message);
+      throw err;
+    }
+  }, [fetchHolidays]);
+
+  const deleteHoliday = useCallback(async (id: number, dateStr: string) => {
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/holidays/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to delete holiday");
+      }
+      const month = dateStr.slice(0, 7);
+      await fetchHolidays(month);
+    } catch (err: any) {
+      setError(err.message);
+      throw err;
+    }
+  }, [fetchHolidays]);
+
+  // â”€â”€ Import / Register Student on Biometric Device â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const importToBiometric = useCallback(
+    async (studentCode: string, options?: BiometricUploadOptions) => {
+      setError(null);
+      setBiometricImportCode(studentCode);
+      try {
+        const res = await fetch(`${API_BASE}/biometric/upload-user`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            studentCode,
+            cardNumber: options?.cardNumber,
+            serialNumbers: options?.serialNumbers,
+            verifyMode: options?.verifyMode,
+            isFaceUpload: options?.isFaceUpload,
+            isFPUpload: options?.isFPUpload,
+            isCardUpload: options?.isCardUpload,
+            isBioPasswordUpload: options?.isBioPasswordUpload,
+          }),
+        });
+        if (!res.ok) {
+          let errData;
+          try {
+            errData = await res.json();
+          } catch {
+            throw new Error(`Server returned a non-JSON error (status ${res.status}).`);
+          }
+          throw new Error(errData.error || "Failed to register student on the biometric device.");
+        }
+        return await res.json();
+      } catch (err: any) {
+        console.error(err);
+        setError(err.message || "Failed to register student on the biometric device.");
+        throw err;
+      } finally {
+        setBiometricImportCode(null);
+      }
+    },
+    []
+  );
+
+  // â”€â”€ Notify WhatsApp (via Whatsassure API through backend) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const notifyWhatsApp = useCallback(async (targetDate?: string) => {
+    const d = targetDate || filter.date;
+    setNotifyingWhatsApp(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/attendance/notify-whatsapp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ records, date: d }),
+      });
+      if (!res.ok) {
+        let errData;
+        try {
+          errData = await res.json();
+        } catch {
+          throw new Error(`Server returned a non-JSON error (status ${res.status}).`);
+        }
+        throw new Error(errData.error || "Failed to notify WhatsApp.");
+      }
+      const data = await res.json();
+      alert(data.message);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Failed to notify WhatsApp.");
+    } finally {
+      setNotifyingWhatsApp(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter.date, records]);
+
+  // â”€â”€ Notify SMS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const notifySMS = useCallback(async (targetDate?: string) => {
+    const d = targetDate || filter.date;
+    setNotifyingSMS(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/attendance/notify-sms`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ records, date: d }),
+      });
+      if (!res.ok) {
+        let errData;
+        try {
+          errData = await res.json();
+        } catch {
+          throw new Error(`Server returned a non-JSON error (status ${res.status}).`);
+        }
+        throw new Error(errData.error || "Failed to notify SMS.");
+      }
+      const data = await res.json();
+      alert(data.message);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Failed to notify SMS.");
+    } finally {
+      setNotifyingSMS(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter.date, records]);
+
+  // â”€â”€ Filter & Pagination â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const updateFilter = useCallback((patch: Partial<FilterState>) => {
+    setFilter((prev) => ({ ...prev, ...patch }));
+    setPage(0);
+  }, []);
+
+  const filtered = useMemo(() => {
+    const q = filter.search.toLowerCase();
+    return records.filter((r) => {
+      const matchSearch =
+        !q ||
+        r.student.name.toLowerCase().includes(q) ||
+        r.student.contact.includes(q) ||
+        r.student.code.toLowerCase().includes(q);
+
+      const matchStatus = !filter.status || r.status === filter.status;
+
+      const matchStandard = !filter.standard || r.student.standard === filter.standard;
+
+      const matchBatch =
+        !filter.batchId ||
+        (filter.batchId === "null" && r.batch.id === null) ||
+        String(r.batch.id) === filter.batchId;
+
+      return matchSearch && matchStatus && matchStandard && matchBatch;
+    });
+  }, [records, filter.search, filter.status, filter.standard, filter.batchId]);
+
+  const filteredSummary = useMemo(() => computeSummary(filtered), [filtered]);
+
+  const uniqueStandards = useMemo(() => {
+    const standards = records
+      .map((r) => r.student.standard)
+      .filter((s): s is string => !!s && s.trim() !== "");
+    return Array.from(new Set(standards)).sort();
+  }, [records]);
+
+  const totalPages = Math.ceil(filtered.length / PER_PAGE);
+  const paged = filtered.slice(page * PER_PAGE, (page + 1) * PER_PAGE);
+
+  return {
+    records: paged,
+    allRecords: records,
+    summary: filteredSummary,
+    filter,
+    updateFilter,
+    standards: uniqueStandards,
+    batches,
+    syncing,
+    syncedAt,
+    error,
+    page,
+    totalPages,
+    totalFiltered: filtered.length,
+    setPage,
+    sync,
+    markLeave,
+    addEmployee,
+    editRecord,
+    deleteRecord,
+    importToBiometric,
+    biometricImportCode,
+    notifyWhatsApp,
+    notifyingWhatsApp,
+    notifySMS,
+    notifyingSMS,
+    addBatch,
+    updateBatch,
+    deleteBatch,
+    holidays,
+    fetchHolidays,
+    addHoliday,
+    deleteHoliday,
+  };
+}

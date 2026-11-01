@@ -1,0 +1,344 @@
+﻿"use client";
+
+import { useState, useRef } from "react";
+import Link from "next/link";
+import * as XLSX from "xlsx";
+import { useAttendance } from "@/hooks/useAttendance";
+import { StatCards } from "@/components/attendance/StatCards";
+import { FilterBar } from "@/components/attendance/FilterBar";
+import { AttendanceTable } from "@/components/attendance/AttendanceTable";
+import { AddEmployeeModal } from "@/components/attendance/AddEmployeeModal";
+import { EditRecordModal } from "@/components/attendance/EditRecordModal";
+import { DeleteConfirmModal } from "@/components/attendance/DeleteConfirmModal";
+import type { AttendanceRecord } from "@/types/attendance";
+
+export default function AttendancePage() {
+  const {
+    records,
+    summary,
+    filter,
+    updateFilter,
+    syncing,
+    syncedAt,
+    error,
+    page,
+    totalPages,
+    totalFiltered,
+    setPage,
+    sync,
+    markLeave,
+    addEmployee,
+    editRecord,
+    deleteRecord,
+    importToBiometric,
+    biometricImportCode,
+    notifyWhatsApp,
+    notifyingWhatsApp,
+    notifySMS,
+    notifyingSMS,
+    standards,
+    batches,
+  } = useAttendance();
+
+  const [isAddOpen, setIsAddOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<AttendanceRecord | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AttendanceRecord | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const importRef = useRef<HTMLInputElement>(null);
+
+  // â”€â”€â”€ Import Excel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setImporting(true);
+    setImportError(null);
+
+    try {
+      const data = await file.arrayBuffer();
+      const workbook = XLSX.read(data);
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json<Record<string, string>>(sheet);
+
+      if (rows.length === 0) {
+        setImportError("The Excel file is empty or has no valid rows.");
+        return;
+      }
+
+      for (const row of rows) {
+        await addEmployee({
+          code:     row["Employee Code"] ?? row["Employee ID"] ?? row["Code"] ?? row["ID"]  ?? "",
+          name:     row["Employee Name"] ?? row["Name"]        ?? "",
+          gender:   row["Gender"]                                    ?? "",
+          contact:  row["Contact"]     ?? row["Phone"]               ?? "",
+          rollNo:   row["Roll No"]     ?? row["Roll Number"]         ?? "",
+          standard: row["Standard"]    ?? row["Class"]               ?? "",
+          status:  (row["Status"] as AttendanceRecord["status"])     ?? "Present",
+          punchIn:  row["Punch In"]    ?? row["Check In"]            ?? "",
+          punchOut: row["Punch Out"]   ?? row["Check Out"]           ?? "",
+        });
+      }
+    } catch (err) {
+      setImportError("Failed to parse the Excel file. Please check the format.");
+      console.error(err);
+    } finally {
+      setImporting(false);
+      e.target.value = "";
+    }
+  };
+
+  // â”€â”€â”€ Export Excel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const handleExport = () => {
+    if (records.length === 0) return;
+
+    // âœ… Uses correct nested AttendanceRecord shape (r.student.*)
+    const rows = records.map((r) => ({
+      "Employee ID": r.student.code,
+      "Name":        r.student.name,
+      "Roll No":     r.student.rollNo,
+      "Standard":    r.student.standard,
+      "Gender":      r.student.gender,
+      "Contact":     r.student.contact,
+      "Date":        r.date,
+      "Punch In":    r.punchIn  ?? "",
+      "Punch Out":   r.punchOut ?? "",
+      "Status":      r.status,
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+
+    // Auto-width: measure the longest value in each column
+    const colWidths = Object.keys(rows[0]).map((key) => ({
+      wch: Math.max(
+        key.length,
+        ...rows.map((r) => String(r[key as keyof typeof r] ?? "").length)
+      ) + 2,
+    }));
+    worksheet["!cols"] = colWidths;
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Attendance");
+
+    const fileName = `attendance-${filter.date ?? new Date().toISOString().slice(0, 10)}.xlsx`;
+    XLSX.writeFile(workbook, fileName);
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Top bar */}
+      <div className="bg-gray-900 px-6 py-4 flex items-center justify-between">
+        <div>
+          <h1 className="text-white text-lg font-medium">Student Attendance</h1>
+          <p className="text-gray-400 text-sm mt-0.5">
+            Biometric attendance via SmartOffice API
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => sync(filter.date)}
+            disabled={syncing}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-60 transition-colors"
+          >
+            <svg className={`w-4 h-4 ${syncing ? "animate-spin" : ""}`} fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            {syncing ? "Syncing..." : "Sync Biometric"}
+          </button>
+
+          <Link
+            href="/batches"
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-gray-800 text-gray-200 border border-gray-700 rounded-lg hover:bg-gray-700 transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            Manage Batches
+          </Link>
+
+          <Link
+            href="/holidays"
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-gray-800 text-gray-200 border border-gray-700 rounded-lg hover:bg-gray-700 transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+            </svg>
+            Manage Holidays
+          </Link>
+
+          <Link
+            href="/reports"
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-gray-800 text-gray-200 border border-gray-700 rounded-lg hover:bg-gray-700 transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+            </svg>
+            Reports
+          </Link>
+
+          <button
+            onClick={() => setIsAddOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4"/>
+            </svg>
+            Add Student
+          </button>
+
+          {/* Hidden file input */}
+          <input
+            ref={importRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            className="hidden"
+            onChange={handleImport}
+          />
+
+          {/* Import Excel */}
+          <button
+            onClick={() => importRef.current?.click()}
+            disabled={importing}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-teal-600 text-white rounded-lg hover:bg-teal-700 disabled:opacity-60 transition-colors"
+          >
+            <svg className={`w-4 h-4 ${importing ? "animate-spin" : ""}`} fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+            </svg>
+            {importing ? "Importing..." : "Import Excel"}
+          </button>
+
+          {/* Export Excel */}
+          <button
+            onClick={handleExport}
+            disabled={records.length === 0}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-60 transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+            </svg>
+            Export Excel
+          </button>
+
+          {/* Notify WhatsApp */}
+          <button
+            onClick={() => notifyWhatsApp(filter.date)}
+            disabled={records.length === 0 || notifyingWhatsApp}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-green-600 rounded-md shadow-sm hover:bg-green-700 disabled:opacity-50"
+          >
+            <svg className={`w-4 h-4 ${notifyingWhatsApp ? "animate-spin" : ""}`} fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+            </svg>
+            {notifyingWhatsApp ? "Sending..." : "Notify WhatsApp"}
+          </button>
+          
+          {/* Notify SMS */}
+          <button
+            onClick={() => notifySMS(filter.date)}
+            disabled={records.length === 0 || notifyingSMS}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 disabled:opacity-50"
+          >
+            <svg className={`w-4 h-4 ${notifyingSMS ? "animate-spin" : ""}`} fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+            </svg>
+            {notifyingSMS ? "Sending SMS..." : "Notify SMS"}
+          </button>
+        </div>
+      </div>
+
+      {/* Sync error banner */}
+      {error && (
+        <div className="mx-6 mt-4 px-4 py-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-3 text-sm text-red-700">
+          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M12 3C6.48 3 2 7.48 2 12s4.48 9 10 9 10-4.48 10-10S17.52 3 12 3z"/>
+          </svg>
+          <span>
+            <strong>Sync error:</strong> {error}.{" "}
+            {error.includes("API Key") && "Check your SMARTOFFICE_API_KEY in .env.local."}
+            {error.includes("Serial Number") && "Verify the device serial number in SmartOffice."}
+          </span>
+        </div>
+      )}
+
+      {/* Import error banner */}
+      {importError && (
+        <div className="mx-6 mt-4 px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg flex items-center gap-3 text-sm text-amber-700">
+          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M12 3C6.48 3 2 7.48 2 12s4.48 9 10 9 10-4.48 10-10S17.52 3 12 3z"/>
+          </svg>
+          <span><strong>Import error:</strong> {importError}</span>
+          <button onClick={() => setImportError(null)} className="ml-auto text-amber-500 hover:text-amber-700">âœ•</button>
+        </div>
+      )}
+
+      {/* Stat cards */}
+      <StatCards summary={summary} />
+
+      {/* Table card */}
+      <div className="mx-6 mb-6 bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="bg-gray-900 px-5 py-3.5 flex items-center justify-between">
+          <h2 className="text-white text-sm font-medium flex items-center gap-2">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+            </svg>
+            Attendance Records
+          </h2>
+          <div className="flex items-center gap-4 text-xs text-gray-400">
+            {[
+              { color: "bg-green-500",  label: "Present"  },
+              { color: "bg-red-500",    label: "Absent"   },
+              { color: "bg-amber-500",  label: "Late"     },
+              { color: "bg-indigo-500", label: "On Leave" },
+            ].map(({ color, label }) => (
+              <span key={label} className="flex items-center gap-1.5">
+                <span className={`w-2 h-2 rounded-full ${color}`} />
+                {label}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <FilterBar
+          filter={filter}
+          onChange={updateFilter}
+          onSync={() => sync(filter.date)}
+          syncing={syncing}
+          syncedAt={syncedAt}
+          standards={standards}
+          batches={batches}
+        />
+
+        <AttendanceTable
+          records={records}
+          page={page}
+          totalPages={totalPages}
+          totalFiltered={totalFiltered}
+          onPageChange={setPage}
+          onMarkLeave={markLeave}
+          onEdit={setEditTarget}
+          onDelete={setDeleteTarget}
+        />
+      </div>
+
+      {/* Modals */}
+      <AddEmployeeModal
+        open={isAddOpen}
+        onClose={() => setIsAddOpen(false)}
+        onSubmit={addEmployee}
+        batches={batches}
+      />
+      <EditRecordModal
+        open={!!editTarget}
+        record={editTarget}
+        onClose={() => setEditTarget(null)}
+        onSubmit={editRecord}
+        batches={batches}
+      />
+      <DeleteConfirmModal
+        open={!!deleteTarget}
+        record={deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={deleteRecord}
+      />
+    </div>
+  );
+}
